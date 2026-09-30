@@ -192,7 +192,7 @@ extension Exercise {
     public func weightEntryLabel(_ unit: WeightUnit) -> String {
         let symbol = unit == .kg ? "Kg" : unit.symbol
         if exerciseType == .bodyweightReps { return "+" + (strengthRecording?.weightLabel(unit) ?? symbol) }
-        return strengthRecording?.weightLabel(unit) ?? (isDumbbell ? "\(symbol) ?" : symbol)
+        return strengthRecording?.weightLabel(unit) ?? symbol
     }
     public var weightRecordingExplanation: String? {
         guard strengthRecording != nil || recordingNeedsConfirmation else { return nil }

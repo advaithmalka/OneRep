@@ -192,7 +192,13 @@ public final class WorkoutViewModel {
         catch { errorMessage = error.localizedDescription; return }
         try? await workoutRepository.deleteAllIncomplete()
 
-        let exercises: [WorkoutExercise] = template?.resolvingBodyweight(from: bodyweightLibrary).instantiateExercises() ?? []
+        var exercises: [WorkoutExercise] = template?.resolvingBodyweight(from: bodyweightLibrary).instantiateExercises() ?? []
+        if template != nil, plannedSessionId == nil, !isDeload {
+            let history = (try? await workoutRepository.fetchAll()) ?? []
+            exercises = WorkoutDefaultsService.applyingLatestPerformance(
+                to: exercises, history: history
+            )
+        }
 
         var workout = Workout(
             id: UUID(),
@@ -783,11 +789,11 @@ public final class WorkoutViewModel {
 
     /// Update the weight of a specific set within an exercise.
     public func updateSetWeight(exerciseId: UUID, setId: UUID, weight: Double?) async {
-        await mutateSet(exerciseId: exerciseId, setId: setId) { set in
-            // Parent fields of a grouped drop set mirror its top segment — edit the segment instead.
-            guard set.dropSets.isEmpty else { return }
-            set.weight = weight
-        }
+        guard var workout = currentWorkout,
+              let exerciseIndex = workout.exercises.firstIndex(where: { $0.id == exerciseId }),
+              workout.exercises[exerciseIndex].setWeightAndCarryForward(weight, from: setId) else { return }
+        activeExerciseId = exerciseId
+        await persist(workout)
         await reelectIfCompleted(exerciseId: exerciseId, setId: setId)
     }
 

@@ -27,27 +27,40 @@ struct WorkoutSummaryView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
-                // Large checkmark with animation
-                ZStack {
-                    Circle()
-                        .fill(Color.green.opacity(0.15))
-                        .frame(width: 56, height: 56)
+                Button(action: finishWorkout) {
+                    VStack(spacing: 4) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.green.opacity(0.15))
+                                .frame(width: 56, height: 56)
 
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.green)
-                        .scaleEffect(showCheckmark ? 1.0 : 0.5)
-                        .opacity(showCheckmark ? 1.0 : 0.3)
+                            if viewModel.isCompleting {
+                                ProgressView()
+                                    .tint(.green)
+                            } else {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 40))
+                                    .foregroundStyle(.green)
+                                    .scaleEffect(showCheckmark ? 1.0 : 0.5)
+                                    .opacity(showCheckmark ? 1.0 : 0.3)
+                            }
+                        }
+
+                        Text("FINISH")
+                            .font(.system(size: 13, weight: .black))
+                            .tracking(1)
+                            .foregroundStyle(.white)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .disabled(viewModel.isCompleting)
+                .accessibilityLabel("Finish workout")
                 .onAppear {
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
                         showCheckmark = true
                     }
                 }
-
-                Text("Finish Workout?")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
 
                 // Stats grid
                 VStack(spacing: 6) {
@@ -107,41 +120,7 @@ struct WorkoutSummaryView: View {
                     }
                 }
 
-                // Done button
-                Button {
-                    #if os(watchOS)
-                    WKInterfaceDevice.current().play(.success)
-                    #endif
-                    Task {
-                        do {
-                            try await viewModel.completeWorkout()
-                        } catch {
-                            print("[WorkoutSummary] Complete workout failed: \(error)")
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        if viewModel.isCompleting {
-                            ProgressView()
-                                .tint(.black)
-                        } else {
-                            Text("DONE")
-                                .font(.system(size: 14, weight: .black))
-                                .tracking(1)
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .bold))
-                        }
-                    }
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(viewModel.isCompleting ? primaryBlue.opacity(0.5) : primaryBlue)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(viewModel.isCompleting)
-
-                // Cancel button — below DONE for intentional friction
+                // Cancel button — below the workout summary for intentional friction
                 Button {
                     showingCancelConfirmation = true
                 } label: {
@@ -200,5 +179,18 @@ struct WorkoutSummaryView: View {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
         }
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func finishWorkout() {
+        #if os(watchOS)
+        WKInterfaceDevice.current().play(.success)
+        #endif
+        Task {
+            do {
+                try await viewModel.completeWorkout()
+            } catch {
+                print("[WorkoutSummary] Complete workout failed: \(error)")
+            }
+        }
     }
 }

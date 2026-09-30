@@ -11,6 +11,7 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
     public var isReachable: Bool = false
     public var lastSyncDate: Date?
     public var lastControlError: String?
+    public var lastControlStatus: String?
 
     // Callbacks for received data
     public var onExercisesReceived: (([Exercise]) -> Void)?
@@ -168,9 +169,11 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
                 "type": SyncMessageType.workoutInProgress.rawValue,
                 "payload": data.base64EncodedString()
             ]
-            WCSession.default.sendMessage(message, replyHandler: nil) { error in
-                print("ConnectivityManager: sendWorkoutSnapshot failed - \(error)")
-            }
+            WCSession.default.sendMessage(
+                message,
+                replyHandler: nil,
+                errorHandler: Self.handleWorkoutSnapshotError
+            )
         } catch {
             print("ConnectivityManager: Failed to encode workout snapshot - \(error)")
         }
@@ -199,41 +202,58 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
             print("ConnectivityManager: Live context failed - \(error)")
         }
         if WCSession.default.isReachable {
-            WCSession.default.sendMessage(["type": "workoutLive", "payload": payload],
-                                          replyHandler: nil) { error in
-                print("ConnectivityManager: Live message failed - \(error)")
-            }
+            WCSession.default.sendMessage(
+                ["type": "workoutLive", "payload": payload],
+                replyHandler: nil,
+                errorHandler: Self.handleWorkoutLiveError
+            )
         }
         #endif
     }
 
-    /// Phone controls are immediate only. They are never queued for replay.
+    /// Deliver controls immediately while the Watch app is awake. When watchOS
+    /// suspends its UI, queue the same command for background delivery instead.
     public func sendWorkoutControl(state: WorkoutLiveState, action: WorkoutLiveAction,
-                                   reviewedReps: Int? = nil, reviewedWeightKg: Double? = nil) {
+                                   reviewedReps: Int? = nil, reviewedWeightKg: Double? = nil,
+                                   exerciseID: UUID? = nil, setID: UUID? = nil,
+                                   setType: SetType? = nil) {
         #if canImport(WatchConnectivity)
-        guard WCSession.default.isReachable else {
-            lastControlError = "Watch is offline. Use its controls until it reconnects."
+        guard WCSession.default.activationState == .activated else {
+            lastControlError = "Watch sync is still starting. Try again in a moment."
             return
         }
         let command = WorkoutLiveCommand(sessionID: state.sessionID,
                                          expectedRevision: state.revision, action: action,
                                          reviewedReps: reviewedReps,
-                                         reviewedWeightKg: reviewedWeightKg)
+                                         reviewedWeightKg: reviewedWeightKg,
+                                         exerciseID: exerciseID, setID: setID,
+                                         setType: setType)
         guard let data = try? encoder.encode(command) else { return }
+        let payload = data.base64EncodedString()
         lastControlError = nil
+        lastControlStatus = nil
+        guard WCSession.default.isReachable else {
+            queueWorkoutControl(payload)
+            return
+        }
+        let replyHandler = Self.makeWorkoutControlReplyHandler(for: self)
+        let errorHandler = Self.makeWorkoutControlErrorHandler(for: self, payload: payload)
         WCSession.default.sendMessage(
-            ["type": "workoutControl", "payload": data.base64EncodedString()],
-            replyHandler: { [weak self] message in
-                guard let encoded = message["payload"] as? String,
-                      let replyData = Data(base64Encoded: encoded),
-                      let reply = try? JSONDecoder().decode(WorkoutLiveCommandReply.self, from: replyData) else { return }
-                Task { @MainActor in self?.lastControlError = reply.reason }
-            },
-            errorHandler: { [weak self] error in
-                let message = error.localizedDescription
-                Task { @MainActor in self?.lastControlError = message }
-            }
+            ["type": "workoutControl", "payload": payload],
+            replyHandler: replyHandler,
+            errorHandler: errorHandler
         )
+        #endif
+    }
+
+    private func queueWorkoutControl(_ payload: String) {
+        #if canImport(WatchConnectivity)
+        WCSession.default.transferUserInfo([
+            "type": "workoutControl",
+            "payload": payload
+        ])
+        lastControlError = nil
+        lastControlStatus = "Sent in background · applies when the Watch wakes"
         #endif
     }
 
@@ -248,9 +268,11 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
                 "type": "workoutStarted",
                 "payload": data.base64EncodedString()
             ]
-            WCSession.default.sendMessage(message, replyHandler: nil) { error in
-                print("ConnectivityManager: sendWorkoutStarted failed - \(error)")
-            }
+            WCSession.default.sendMessage(
+                message,
+                replyHandler: nil,
+                errorHandler: Self.handleWorkoutStartedError
+            )
         } catch {
             print("ConnectivityManager: Failed to encode workout start - \(error)")
         }
@@ -279,10 +301,59 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
         let message: [String: Any] = [
             "type": "workoutEnded"
         ]
-        WCSession.default.sendMessage(message, replyHandler: nil) { error in
-            print("ConnectivityManager: sendWorkoutEnded failed - \(error)")
-        }
+        WCSession.default.sendMessage(
+            message,
+            replyHandler: nil,
+            errorHandler: Self.handleWorkoutEndedError
+        )
         #endif
+    }
+
+    // WatchConnectivity does not guarantee that message callbacks run on the main
+    // actor. Keep the callback closures themselves nonisolated, then explicitly hop
+    // to the main actor only when observable UI state must change.
+    private nonisolated static func handleWorkoutSnapshotError(_ error: any Error) {
+        print("ConnectivityManager: sendWorkoutSnapshot failed - \(error)")
+    }
+
+    private nonisolated static func handleWorkoutLiveError(_ error: any Error) {
+        print("ConnectivityManager: Live message failed - \(error)")
+    }
+
+    private nonisolated static func handleWorkoutStartedError(_ error: any Error) {
+        print("ConnectivityManager: sendWorkoutStarted failed - \(error)")
+    }
+
+    private nonisolated static func handleWorkoutEndedError(_ error: any Error) {
+        print("ConnectivityManager: sendWorkoutEnded failed - \(error)")
+    }
+
+    private nonisolated static func makeWorkoutControlReplyHandler(
+        for manager: ConnectivityManager
+    ) -> ([String: Any]) -> Void {
+        { [weak manager] message in
+            guard let encoded = message["payload"] as? String,
+                  let replyData = Data(base64Encoded: encoded),
+                  let reply = try? JSONDecoder().decode(
+                    WorkoutLiveCommandReply.self,
+                    from: replyData
+                  ) else { return }
+            Task { @MainActor [weak manager] in
+                manager?.lastControlError = reply.reason
+                manager?.lastControlStatus = reply.accepted ? "Synced with Watch" : nil
+            }
+        }
+    }
+
+    private nonisolated static func makeWorkoutControlErrorHandler(
+        for manager: ConnectivityManager,
+        payload: String
+    ) -> ((any Error) -> Void) {
+        { [weak manager] _ in
+            Task { @MainActor [weak manager] in
+                manager?.queueWorkoutControl(payload)
+            }
+        }
     }
 
     /// Process received application context (used both by delegate and on-launch catch-up)
@@ -472,6 +543,19 @@ extension ConnectivityManager: WCSessionDelegate {
         // Ignore stale rest timer messages from previous builds
         if let type = userInfo["type"] as? String,
            type == "restTimerStarted" || type == "restTimerStopped" {
+            return
+        }
+
+        // Commands sent while the Watch UI is asleep arrive through the durable
+        // background channel. The command ID is deduplicated by the workout model.
+        if userInfo["type"] as? String == "workoutControl",
+           let encoded = userInfo["payload"] as? String,
+           let data = Data(base64Encoded: encoded),
+           let command = try? JSONDecoder().decode(WorkoutLiveCommand.self, from: data) {
+            Task { @MainActor in
+                self.lastSyncDate = Date()
+                _ = await self.onWorkoutControl?(command)
+            }
             return
         }
 

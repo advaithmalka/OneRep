@@ -28,7 +28,6 @@ struct WatchActiveWorkoutView: View {
     var body: some View {
         if let workout = viewModel.activeWorkout {
             VStack(spacing: 0) {
-                if viewModel.isResting { restBanner }
                 TabView(selection: $selectedPage) {
                     actionsPage.tag(0)
                     activePage(workout).tag(1)
@@ -37,7 +36,14 @@ struct WatchActiveWorkoutView: View {
                 .tabViewStyle(.page(indexDisplayMode: .automatic))
             }
             .navigationBarBackButtonHidden()
-            .toolbar(.hidden, for: .navigationBar)
+            .toolbar {
+                if viewModel.isResting {
+                    ToolbarItem(placement: .topBarLeading) {
+                        restToolbarItem
+                    }
+                }
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
             .onAppear {
                 if viewModel.isReviewingSet { showSetEditor = true }
             }
@@ -91,6 +97,21 @@ struct WatchActiveWorkoutView: View {
                 Text(actionError ?? "Please try again.")
             }
         }
+    }
+
+    private var restToolbarItem: some View {
+        Button { showRestTimer = true } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "timer")
+                    .font(.system(size: 10, weight: .bold))
+                Text(viewModel.restTimerText)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(restTimerYellow)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Rest timer, \(viewModel.restTimerText). Double tap to adjust")
     }
 
     private var actionsPage: some View {

@@ -32,6 +32,7 @@ struct ExerciseCardView: View {
     let alwaysShowRPE: Bool
     let intensityMetric: IntensityMetric
     let weightUnit: WeightUnit
+    let usesWorkoutMirrorStyle: Bool
     let onWeightRecordingChange: ((WeightRecording) -> Void)?
     var onSaveRecordingDefault: ((WeightRecording) -> Void)? = nil
     var onSideSetsChange: ((UUID, [SideSetEntry]) -> Void)? = nil
@@ -71,6 +72,7 @@ struct ExerciseCardView: View {
         alwaysShowRPE: Bool = false,
         intensityMetric: IntensityMetric = .rpe,
         weightUnit: WeightUnit = .kg,
+        usesWorkoutMirrorStyle: Bool = false,
         onWeightRecordingChange: ((WeightRecording) -> Void)? = nil,
         onSideSetsChange: ((UUID, [SideSetEntry]) -> Void)? = nil,
         onSideRest: ((UUID) -> Void)? = nil,
@@ -101,6 +103,7 @@ struct ExerciseCardView: View {
         self.alwaysShowRPE = alwaysShowRPE
         self.intensityMetric = intensityMetric
         self.weightUnit = weightUnit
+        self.usesWorkoutMirrorStyle = usesWorkoutMirrorStyle
         self.onWeightRecordingChange = onWeightRecordingChange
         self.onSideSetsChange = onSideSetsChange
         self.onSideRest = onSideRest
@@ -246,11 +249,11 @@ struct ExerciseCardView: View {
         .sheet(isPresented: $editingWeightRecording) {
             WeightRecordingEditorSheet(exercise: workoutExercise.exercise, saveDefault: onSaveRecordingDefault) { onWeightRecordingChange?($0) }
         }
-        .background(STColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: STRadius.card))
+        .background(cardSurface)
+        .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius))
         .overlay(
-            RoundedRectangle(cornerRadius: STRadius.card)
-                .stroke(STColors.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: cardCornerRadius)
+                .stroke(cardBorder, lineWidth: 1)
         )
     }
 
@@ -264,12 +267,12 @@ struct ExerciseCardView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(workoutExercise.exercise.name)
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(
-                        STColors.primary
-                    )
+                    .font(.system(size: usesWorkoutMirrorStyle ? 20 : 18, weight: .bold))
+                    .foregroundStyle(usesWorkoutMirrorStyle ? Color.white : STColors.primary)
 
-                Text(muscleGroupText)
+                Text(usesWorkoutMirrorStyle
+                     ? "\(workoutExercise.sets.count) Sets · \(muscleGroupText)"
+                     : muscleGroupText)
                     .font(.system(size: 12))
                     .foregroundStyle(STColors.textSecondary)
             }
@@ -284,29 +287,36 @@ struct ExerciseCardView: View {
                             editingWeightRecording = true
                         }
                     }
-                    Button("Reorder Sets", systemImage: "arrow.up.arrow.down") {
-                        guard STNumericTextField.commitActiveInput() else { return }
-                        isReorderingSets = true
+                    if onMoveSet != nil {
+                        Button("Reorder Sets", systemImage: "arrow.up.arrow.down") {
+                            guard STNumericTextField.commitActiveInput() else { return }
+                            isReorderingSets = true
+                        }
+                        .disabled(workoutExercise.sets.count < 2)
                     }
-                    .disabled(workoutExercise.sets.count < 2)
                     Button(showRPE ? "Hide \(intensityMetric.displayName)" : "Show \(intensityMetric.displayName)", systemImage: "gauge.with.needle") {
                         guard STNumericTextField.commitActiveInput() else { return }
                         showRPE.toggle()
                     }
-                    Button(
-                        workoutExercise.notes != nil && !workoutExercise.notes!.isEmpty ? "Edit Note" : "Add Note",
-                        systemImage: "note.text"
-                    ) {
-                        isEditingNote = true
+                    if onNoteChange != nil {
+                        Button(
+                            workoutExercise.notes != nil && !workoutExercise.notes!.isEmpty ? "Edit Note" : "Add Note",
+                            systemImage: "note.text"
+                        ) {
+                            isEditingNote = true
+                        }
                     }
                     if workoutExercise.sets.count > 1, let lastSet = workoutExercise.sets.last {
                         Button("Remove Last Set", systemImage: "minus.circle") {
                             onRemoveSet?(lastSet.id)
                         }
+                        .disabled(onRemoveSet == nil)
                     }
-                    Divider()
-                    Button("Remove Exercise", systemImage: "trash", role: .destructive) {
-                        onRemoveExercise?()
+                    if onRemoveExercise != nil {
+                        Divider()
+                        Button("Remove Exercise", systemImage: "trash", role: .destructive) {
+                            onRemoveExercise?()
+                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -317,6 +327,18 @@ struct ExerciseCardView: View {
             }
         }
         .padding(STSpacing.cardPadding)
+    }
+
+    private var cardSurface: Color {
+        usesWorkoutMirrorStyle ? Color(hex: "29292D") : STColors.surface
+    }
+
+    private var cardBorder: Color {
+        usesWorkoutMirrorStyle ? Color.white.opacity(0.08) : STColors.border
+    }
+
+    private var cardCornerRadius: CGFloat {
+        usesWorkoutMirrorStyle ? 22 : STRadius.card
     }
 
     /// Grip handle for drag-to-reorder. highPriorityGesture + minimumDistance 0

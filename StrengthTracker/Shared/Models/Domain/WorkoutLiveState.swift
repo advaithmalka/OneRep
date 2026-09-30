@@ -32,8 +32,10 @@ public struct WorkoutLiveState: Codable, Sendable {
     }
 }
 
-public enum WorkoutLiveAction: String, Codable, Sendable {
+public enum WorkoutLiveAction: String, Codable, Hashable, Sendable {
     case startSet, endSet, saveReviewedSet, nextExercise, previousExercise, skipRest
+    case selectExercise, updateSetWeight, updateSetReps, toggleSetCompletion
+    case addSet, removeSet, updateSetType
 }
 
 public struct WorkoutLiveCommand: Codable, Sendable {
@@ -43,15 +45,23 @@ public struct WorkoutLiveCommand: Codable, Sendable {
     public let action: WorkoutLiveAction
     public let reviewedReps: Int?
     public let reviewedWeightKg: Double?
+    public let exerciseID: UUID?
+    public let setID: UUID?
+    public let setType: SetType?
 
     public init(sessionID: UUID, expectedRevision: Int64, action: WorkoutLiveAction,
-                reviewedReps: Int? = nil, reviewedWeightKg: Double? = nil) {
+                reviewedReps: Int? = nil, reviewedWeightKg: Double? = nil,
+                exerciseID: UUID? = nil, setID: UUID? = nil,
+                setType: SetType? = nil) {
         self.id = UUID()
         self.sessionID = sessionID
         self.expectedRevision = expectedRevision
         self.action = action
         self.reviewedReps = reviewedReps
         self.reviewedWeightKg = reviewedWeightKg
+        self.exerciseID = exerciseID
+        self.setID = setID
+        self.setType = setType
     }
 }
 

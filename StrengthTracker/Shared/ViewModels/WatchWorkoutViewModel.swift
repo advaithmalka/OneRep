@@ -75,6 +75,8 @@ public final class WatchWorkoutViewModel {
     private var setAttemptStartedAt: Date?
     private var pendingMotionSetID: UUID?
     private var liveRevision: Int64 = 0
+    private var processedControlIDs: Set<UUID> = []
+    private var processedControlOrder: [UUID] = []
     private func sessionStateKey(for workoutID: UUID) -> String {
         "oneRep.watch.sessionState.\(workoutID.uuidString)"
     }
@@ -255,8 +257,12 @@ public final class WatchWorkoutViewModel {
     }
 
     public func beginSetAttempt() {
-        guard isActive, !isPaused, !isResting, !isCollectingSet, !isReviewingSet,
-              let exercise = currentExercise?.exercise else { return }
+        guard isActive, !isPaused, !isCollectingSet, !isReviewingSet else { return }
+        if isResting {
+            stopRestTimer()
+            configureMotionForCurrentExercise()
+        }
+        guard let exercise = currentExercise?.exercise else { return }
         isCollectingSet = true
         setAttemptStartedAt = Date()
         detectedRepCount = 0
@@ -334,34 +340,175 @@ public final class WatchWorkoutViewModel {
 
     /// Reject commands aimed at a stale screen or a previous workout.
     public func applyControl(_ command: WorkoutLiveCommand) async -> WorkoutLiveCommandReply {
+        if processedControlIDs.contains(command.id) {
+            return WorkoutLiveCommandReply(accepted: true)
+        }
         guard let workout = activeWorkout, isActive,
-              workout.id == command.sessionID,
-              liveRevision == command.expectedRevision else {
+              workout.id == command.sessionID else {
+            return WorkoutLiveCommandReply(accepted: false, reason: "Workout changed on Watch. Refresh and try again.")
+        }
+        let idempotentEditActions: Set<WorkoutLiveAction> = [
+            .updateSetWeight, .updateSetReps, .updateSetType, .selectExercise
+        ]
+        guard liveRevision == command.expectedRevision || idempotentEditActions.contains(command.action) else {
             return WorkoutLiveCommandReply(accepted: false, reason: "Workout changed on Watch. Refresh and try again.")
         }
         let previousRevision = liveRevision
-        switch command.action {
-        case .startSet: beginSetAttempt()
-        case .endSet: endSetAttempt()
-        case .saveReviewedSet:
-            guard isReviewingSet,
-                  let reps = command.reviewedReps, (0...100).contains(reps),
-                  let weight = command.reviewedWeightKg, weight.isFinite, weight >= 0 else {
-                return WorkoutLiveCommandReply(accepted: false, reason: "Invalid set review")
-            }
-            do {
+        do {
+            switch command.action {
+            case .startSet: beginSetAttempt()
+            case .endSet: endSetAttempt()
+            case .saveReviewedSet:
+                guard isReviewingSet,
+                      let reps = command.reviewedReps, (0...100).contains(reps),
+                      let weight = command.reviewedWeightKg, weight.isFinite, weight >= 0 else {
+                    return WorkoutLiveCommandReply(accepted: false, reason: "Invalid set review")
+                }
                 try await logSet(weight: weight, reps: reps, detectedReps: reviewDetectedReps)
-            } catch {
-                return WorkoutLiveCommandReply(accepted: false, reason: "Watch could not save the set")
+            case .nextExercise: nextExercise()
+            case .previousExercise: previousExercise()
+            case .skipRest:
+                if isResting { skipRestTimer() }
+            case .selectExercise:
+                guard let exerciseID = command.exerciseID,
+                      let index = workout.exercises.firstIndex(where: { $0.id == exerciseID }) else {
+                    return WorkoutLiveCommandReply(accepted: false, reason: "Exercise no longer exists")
+                }
+                selectExercise(at: index)
+            case .updateSetWeight:
+                try await applyMirroredSetWeight(command)
+            case .updateSetReps:
+                try await applyMirroredSetReps(command)
+            case .toggleSetCompletion:
+                try await toggleMirroredSet(command)
+            case .addSet:
+                try await addMirroredSet(command)
+            case .removeSet:
+                try await removeMirroredSet(command)
+            case .updateSetType:
+                try await applyMirroredSetType(command)
             }
-        case .nextExercise: nextExercise()
-        case .previousExercise: previousExercise()
-        case .skipRest:
-            if isResting { skipRestTimer() }
+        } catch {
+            return WorkoutLiveCommandReply(accepted: false, reason: "Watch could not save the change")
         }
-        return liveRevision > previousRevision
-            ? WorkoutLiveCommandReply(accepted: true)
-            : WorkoutLiveCommandReply(accepted: false, reason: "Control unavailable in this set stage.")
+        guard liveRevision > previousRevision else {
+            return WorkoutLiveCommandReply(accepted: false, reason: "Control unavailable in this set stage.")
+        }
+        processedControlIDs.insert(command.id)
+        processedControlOrder.append(command.id)
+        if processedControlOrder.count > 64 {
+            processedControlIDs.remove(processedControlOrder.removeFirst())
+        }
+        return WorkoutLiveCommandReply(accepted: true)
+    }
+
+    private func mirroredSetIndices(
+        _ command: WorkoutLiveCommand,
+        in workout: Workout
+    ) -> (exercise: Int, set: Int)? {
+        guard let exerciseID = command.exerciseID,
+              let setID = command.setID,
+              let exerciseIndex = workout.exercises.firstIndex(where: { $0.id == exerciseID }),
+              let setIndex = workout.exercises[exerciseIndex].sets.firstIndex(where: { $0.id == setID }) else {
+            return nil
+        }
+        return (exerciseIndex, setIndex)
+    }
+
+    private func commitMirroredWorkout(_ workout: Workout) async throws {
+        activeWorkout = workout
+        try await persistNow(workout)
+        connectivityManager.sendWorkoutSnapshot(workout)
+        publishLiveState()
+    }
+
+    /// A phone weight edit becomes the target for this set and every later
+    /// incomplete set of the same exercise, matching how lifters adjust load mid-session.
+    private func applyMirroredSetWeight(_ command: WorkoutLiveCommand) async throws {
+        guard !isCollectingSet, !isReviewingSet,
+              let weight = command.reviewedWeightKg,
+              weight.isFinite, weight >= 0,
+              var workout = activeWorkout,
+              let indices = mirroredSetIndices(command, in: workout) else { return }
+        guard workout.exercises[indices.exercise].setWeightAndCarryForward(
+            weight, from: workout.exercises[indices.exercise].sets[indices.set].id
+        ) else { return }
+        targetWeightPerExercise[indices.exercise] = weight
+        saveSessionState()
+        try await commitMirroredWorkout(workout)
+    }
+
+    private func applyMirroredSetReps(_ command: WorkoutLiveCommand) async throws {
+        guard !isCollectingSet, !isReviewingSet,
+              let reps = command.reviewedReps, (0...1000).contains(reps),
+              var workout = activeWorkout,
+              let indices = mirroredSetIndices(command, in: workout) else { return }
+        workout.exercises[indices.exercise].sets[indices.set].reps = reps
+        try await commitMirroredWorkout(workout)
+    }
+
+    private func applyMirroredSetType(_ command: WorkoutLiveCommand) async throws {
+        guard !isCollectingSet, !isReviewingSet,
+              let setType = command.setType,
+              var workout = activeWorkout,
+              let indices = mirroredSetIndices(command, in: workout) else { return }
+        workout.exercises[indices.exercise].sets[indices.set].setType = setType
+        if setType == .failure {
+            workout.exercises[indices.exercise].sets[indices.set].setFailureFlag(true)
+        }
+        try await commitMirroredWorkout(workout)
+    }
+
+    private func toggleMirroredSet(_ command: WorkoutLiveCommand) async throws {
+        guard !isCollectingSet, !isReviewingSet,
+              var workout = activeWorkout,
+              let indices = mirroredSetIndices(command, in: workout) else { return }
+        let completing = !workout.exercises[indices.exercise].sets[indices.set].isFullyCompleted
+        workout.exercises[indices.exercise].sets[indices.set].setCompleted(completing)
+        currentExerciseIndex = indices.exercise
+        activeWorkout = workout
+        try await persistNow(workout)
+        connectivityManager.sendWorkoutSnapshot(workout)
+        if completing {
+            startRestTimer(seconds: workout.exercises[indices.exercise].restTimerSeconds)
+        } else {
+            publishLiveState()
+        }
+    }
+
+    private func addMirroredSet(_ command: WorkoutLiveCommand) async throws {
+        guard !isCollectingSet, !isReviewingSet,
+              let exerciseID = command.exerciseID,
+              var workout = activeWorkout,
+              let exerciseIndex = workout.exercises.firstIndex(where: { $0.id == exerciseID }) else { return }
+        let previous = workout.exercises[exerciseIndex].sets.last
+        workout.exercises[exerciseIndex].sets.append(ExerciseSet(
+            id: UUID(), order: workout.exercises[exerciseIndex].sets.count + 1,
+            setType: .normal,
+            weight: previous?.weight ?? targetWeightPerExercise[exerciseIndex] ?? nil,
+            reps: previous?.reps ?? targetRepsPerExercise[exerciseIndex] ?? nil,
+            durationSeconds: previous?.durationSeconds,
+            distanceMeters: previous?.distanceMeters,
+            rpe: nil, isCompleted: false, isPersonalRecord: false, completedAt: nil
+        ))
+        if plannedSetsPerExercise[exerciseIndex] != nil {
+            plannedSetsPerExercise[exerciseIndex, default: 0] += 1
+        }
+        try await commitMirroredWorkout(workout)
+    }
+
+    private func removeMirroredSet(_ command: WorkoutLiveCommand) async throws {
+        guard !isCollectingSet, !isReviewingSet,
+              var workout = activeWorkout,
+              let indices = mirroredSetIndices(command, in: workout) else { return }
+        workout.exercises[indices.exercise].sets.remove(at: indices.set)
+        for index in workout.exercises[indices.exercise].sets.indices {
+            workout.exercises[indices.exercise].sets[index].order = index + 1
+        }
+        if let planned = plannedSetsPerExercise[indices.exercise] {
+            plannedSetsPerExercise[indices.exercise] = max(0, planned - 1)
+        }
+        try await commitMirroredWorkout(workout)
     }
 
     // MARK: - Computed Properties
@@ -675,43 +822,19 @@ public final class WatchWorkoutViewModel {
         targetWeightPerExercise = [:]
         targetRepsPerExercise = [:]
 
-        let workoutExercises = template.exercises.sorted { $0.order < $1.order }.enumerated().map { index, te in
-            let sets = (0..<te.targetSets).map { setIndex in
-                let target = te.setTargets.indices.contains(setIndex) ? te.setTargets[setIndex] : nil
-                let resolvedSetType: SetType = {
-                    if let t = target, t.setType != .normal { return t.setType }
-                    return te.isWarmUp ? .warmup : .normal
-                }()
-                return ExerciseSet(
-                    id: UUID(),
-                    order: setIndex + 1,
-                    setType: resolvedSetType,
-                    weight: target?.targetWeight ?? te.targetWeight,
-                    reps: target?.targetReps ?? te.targetReps,
-                    durationSeconds: target?.targetDurationSeconds ?? te.targetDurationSeconds,
-                    distanceMeters: target?.targetDistanceMeters ?? te.targetDistanceMeters,
-                    rpe: nil,
-                    isCompleted: false,
-                    isPersonalRecord: false,
-                    completedAt: nil
-                )
-            }
-            return WorkoutExercise(
-                id: UUID(),
-                exercise: te.exercise,
-                order: index + 1,
-                supersetGroup: te.supersetGroup,
-                notes: te.notes,
-                restTimerSeconds: te.restTimerSeconds,
-                sets: sets
+        var workoutExercises = template.instantiateExercises()
+        if plannedSessionId == nil, !isDeload {
+            let history = (try? await workoutRepository.fetchAll()) ?? []
+            workoutExercises = WorkoutDefaultsService.applyingLatestPerformance(
+                to: workoutExercises, history: history
             )
         }
 
         // Store per-exercise targets
         for (index, te) in template.exercises.sorted(by: { $0.order < $1.order }).enumerated() {
             plannedSetsPerExercise[index] = te.targetSets
-            targetWeightPerExercise[index] = te.targetWeight
-            targetRepsPerExercise[index] = te.targetReps
+            targetWeightPerExercise[index] = workoutExercises[index].sets.last?.weight ?? te.targetWeight
+            targetRepsPerExercise[index] = workoutExercises[index].sets.last?.reps ?? te.targetReps
         }
 
         let workout = Workout(
@@ -822,8 +945,10 @@ public final class WatchWorkoutViewModel {
 
         // Named sides must be edited independently; never replace their summary.
         guard visibleSet?.sideSets == nil else { return }
+        let savedSetID: UUID
         // If there's an incomplete pre-populated set, update it instead of appending
         if let incompleteIndex = workout.exercises[currentExerciseIndex].sets.firstIndex(where: { !$0.isFullyCompleted }) {
+            savedSetID = workout.exercises[currentExerciseIndex].sets[incompleteIndex].id
             workout.exercises[currentExerciseIndex].sets[incompleteIndex].weight = weight
             workout.exercises[currentExerciseIndex].sets[incompleteIndex].reps = reps
             if workout.exercises[currentExerciseIndex].sets[incompleteIndex].startedAt == nil {
@@ -859,8 +984,16 @@ public final class WatchWorkoutViewModel {
             // Watch still marks failure via the set-type cycle — carry the per-set flag
             // so analytics and the iPhone UI see it.
             if newSet.setType == .failure { newSet.setFailureFlag(true) }
+            savedSetID = newSet.id
             workout.exercises[currentExerciseIndex].sets.append(newSet)
         }
+
+        _ = workout.exercises[currentExerciseIndex].setWeightAndCarryForward(
+            weight, from: savedSetID
+        )
+        targetWeightPerExercise[currentExerciseIndex] = weight
+        targetRepsPerExercise[currentExerciseIndex] = reps
+        saveSessionState()
 
         activeWorkout = workout
         viewingSetIndex = nil
@@ -1088,8 +1221,14 @@ public final class WatchWorkoutViewModel {
               currentExerciseIndex < workout.exercises.count,
               idx < workout.exercises[currentExerciseIndex].sets.count,
               workout.exercises[currentExerciseIndex].sets[idx].sideSets == nil else { return }
-        workout.exercises[currentExerciseIndex].sets[idx].weight = weight
+        let setID = workout.exercises[currentExerciseIndex].sets[idx].id
+        guard workout.exercises[currentExerciseIndex].setWeightAndCarryForward(
+            weight, from: setID
+        ) else { return }
         workout.exercises[currentExerciseIndex].sets[idx].reps = reps
+        targetWeightPerExercise[currentExerciseIndex] = weight
+        targetRepsPerExercise[currentExerciseIndex] = reps
+        saveSessionState()
         activeWorkout = workout
         viewingSetIndex = nil
 

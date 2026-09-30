@@ -56,9 +56,9 @@ struct ActiveWorkoutView: View {
                 if let workout = viewModel.currentWorkout, viewModel.isActive {
                     workoutContent(workout)
                 } else if let state = viewModel.watchLiveState, let watchWorkout = state.workout {
-                    watchWorkoutBanner(watchWorkout, state: state)
+                    watchWorkoutContent(watchWorkout, state: state)
                 } else if let watchWorkout = viewModel.watchActiveWorkout {
-                    watchWorkoutBanner(watchWorkout, state: nil)
+                    watchWorkoutContent(watchWorkout, state: nil)
                 } else {
                     startView
                 }
@@ -116,7 +116,10 @@ struct ActiveWorkoutView: View {
         }
     }
 
-    // MARK: - Watch Workout Banner
+    // MARK: - Watch Workout Mirror
+
+    private var watchMirrorBackground: Color { Color(hex: "18181B") }
+    private var watchMirrorRaisedSurface: Color { Color(hex: "343438") }
 
     private func seedWatchReview(from state: WorkoutLiveState) {
         guard state.phase == .review,
@@ -131,106 +134,291 @@ struct ActiveWorkoutView: View {
         watchReviewWeightLb = WeightUnit.lbs.fromKg(nextSet?.weight ?? WeightUnit.lbs.toKg(20))
     }
 
-    private func watchWorkoutBanner(_ workout: Workout, state: WorkoutLiveState?) -> some View {
-        ScrollView {
-        VStack(spacing: 16) {
-            Image(systemName: "applewatch")
-                .font(.system(size: 48))
-                .foregroundStyle(STColors.primary)
+    private func watchWorkoutContent(_ workout: Workout, state: WorkoutLiveState?) -> some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 16) {
+                    watchWorkoutStatus(workout, state: state)
 
-            Text("Workout In Progress on Watch")
-                .font(.headline)
-                .foregroundStyle(STColors.textPrimary)
-
-            VStack(spacing: 8) {
-                Text(workout.name)
-                    .font(.title3.bold())
-                    .foregroundStyle(STColors.textPrimary)
-
-                if let currentExercise = state.flatMap({ workout.exercises.indices.contains($0.currentExerciseIndex)
-                    ? workout.exercises[$0.currentExerciseIndex] : nil }) ?? workout.activeExercise(preferredId: nil) {
-                    Text(currentExercise.exercise.name)
-                        .font(.subheadline)
-                        .foregroundStyle(STColors.textSecondary)
-
-                    ForEach(currentExercise.sets.filter(\.isFullyCompleted)) { set in
-                        Text("Set \(set.order): \(set.reps ?? 0) reps · \((viewModel.userPreferencesService?.weightUnit ?? .lbs).format(set.weight ?? 0, decimals: 1))")
-                            .font(.caption)
-                            .foregroundStyle(STColors.textSecondary)
-                    }
-                }
-
-                if let state {
-                    Text(state.phase == .review ? "Review this set"
-                         : state.phase == .lifting ? "Set in progress"
-                         : state.phase == .resting ? "Resting" : "Ready for next set")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(STColors.primary)
-                    if let end = state.restEndsAt, end > Date() {
-                        Text(timerInterval: Date()...end, countsDown: true)
-                            .font(.title3.monospacedDigit())
-                    }
-                }
-
-                let totalSets = workout.exercises.reduce(0) { $0 + $1.sets.filter(\.isFullyCompleted).count }
-                Text("\(totalSets) sets completed")
-                    .font(.subheadline)
-                    .foregroundStyle(STColors.textSecondary)
-
-                Text(workout.startedAt, style: .timer)
-                    .font(.caption)
-                    .foregroundStyle(STColors.textTertiary)
-            }
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(STColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: STRadius.card))
-            .overlay(
-                RoundedRectangle(cornerRadius: STRadius.card)
-                    .stroke(STColors.border, lineWidth: 1)
-            )
-
-            if let state, let connectivityManager {
-                Text(connectivityManager.isReachable ? "Watch connected" : "Watch offline · updates will sync later")
-                    .font(.caption)
-                    .foregroundStyle(STColors.textSecondary)
-                if let error = connectivityManager.lastControlError {
-                    Text(error).font(.caption).foregroundStyle(.red)
-                }
-                if connectivityManager.isReachable {
-                    HStack {
-                        Button("Previous") { connectivityManager.sendWorkoutControl(state: state, action: .previousExercise) }
-                        Button("Next") { connectivityManager.sendWorkoutControl(state: state, action: .nextExercise) }
-                    }
-                    .disabled(state.phase == .lifting || state.phase == .review)
-                    if state.phase == .ready {
-                        Button("Start Set") { connectivityManager.sendWorkoutControl(state: state, action: .startSet) }
-                    } else if state.phase == .lifting {
-                        Button("End Set") { connectivityManager.sendWorkoutControl(state: state, action: .endSet) }
-                    } else if state.phase == .review {
-                        VStack(spacing: 10) {
-                            Stepper("Reps: \(watchReviewReps)", value: $watchReviewReps, in: 0...100, step: 1)
-                            Stepper("Weight: \(String(format: "%.1f", watchReviewWeightLb)) lb",
-                                    value: $watchReviewWeightLb, in: 0...1000, step: 2.5)
-                            Button("Save Set") {
-                                connectivityManager.sendWorkoutControl(
-                                    state: state, action: .saveReviewedSet,
-                                    reviewedReps: watchReviewReps,
-                                    reviewedWeightKg: WeightUnit.lbs.toKg(watchReviewWeightLb)
+                    ForEach(Array(workout.exercises.enumerated()), id: \.element.id) { index, exercise in
+                        watchExerciseCard(exercise, state: state)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 22)
+                                    .stroke(
+                                        index == state?.currentExerciseIndex ? STColors.primary : Color.clear,
+                                        lineWidth: 3
+                                    )
+                            )
+                            .shadow(
+                                color: index == state?.currentExerciseIndex
+                                    ? STColors.primary.opacity(0.18) : .clear,
+                                radius: 14
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 22))
+                            .onTapGesture {
+                                guard index != state?.currentExerciseIndex,
+                                      state?.phase == .ready || state?.phase == .resting else { return }
+                                sendWatchControl(
+                                    state: state,
+                                    action: .selectExercise,
+                                    exerciseID: exercise.id
                                 )
                             }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    } else if state.phase == .resting {
-                        Button("End Rest Early") { connectivityManager.sendWorkoutControl(state: state, action: .skipRest) }
                     }
+
+                    Color.clear.frame(height: 12)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+            }
+            .scrollDismissesKeyboard(.interactively)
+
+            if let state {
+                watchWorkoutControls(workout, state: state)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-        .background(STColors.background)
+        .background(watchMirrorBackground.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .onDisappear { STNumericTextField.commitActiveInput() }
+    }
+
+    private func watchWorkoutStatus(_ workout: Workout, state: WorkoutLiveState?) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "applewatch")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(STColors.primary)
+                .frame(width: 44, height: 44)
+                .background(Color.black, in: Circle())
+                .overlay(Circle().stroke(STColors.primary.opacity(0.45), lineWidth: 1))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("LIVE WORKOUT")
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(STColors.primary)
+                Text(state.map(watchPhaseLabel) ?? "Syncing workout details")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text(connectivityManager?.isReachable == true ? "Direct connection" : "Background sync active")
+                    .font(.caption)
+                    .foregroundStyle(STColors.textSecondary)
+            }
+            Spacer()
+            Text(workout.startedAt, style: .timer)
+                .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white)
         }
+        .padding(16)
+        .background(Color.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 22))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func watchExerciseCard(
+        _ workoutExercise: WorkoutExercise,
+        state: WorkoutLiveState?
+    ) -> some View {
+        ExerciseCardView(
+            workoutExercise: workoutExercise,
+            onWeightChange: { setID, weight in
+                guard let weight else { return }
+                sendWatchControl(
+                    state: state, action: .updateSetWeight,
+                    reviewedWeightKg: weight,
+                    exerciseID: workoutExercise.id, setID: setID
+                )
+            },
+            onRepsChange: { setID, reps in
+                guard let reps else { return }
+                sendWatchControl(
+                    state: state, action: .updateSetReps,
+                    reviewedReps: reps,
+                    exerciseID: workoutExercise.id, setID: setID
+                )
+            },
+            onToggleComplete: { setID in
+                sendWatchControl(
+                    state: state, action: .toggleSetCompletion,
+                    exerciseID: workoutExercise.id, setID: setID
+                )
+            },
+            onAddSet: {
+                sendWatchControl(
+                    state: state, action: .addSet,
+                    exerciseID: workoutExercise.id
+                )
+            },
+            onRemoveSet: { setID in
+                sendWatchControl(
+                    state: state, action: .removeSet,
+                    exerciseID: workoutExercise.id, setID: setID
+                )
+            },
+            onSetTypeChange: { setID, type in
+                sendWatchControl(
+                    state: state, action: .updateSetType,
+                    exerciseID: workoutExercise.id, setID: setID,
+                    setType: type
+                )
+            },
+            alwaysShowRPE: false,
+            intensityMetric: viewModel.userPreferencesService?.intensityMetric ?? .rpe,
+            weightUnit: viewModel.userPreferencesService?.weightUnit ?? .kg,
+            usesWorkoutMirrorStyle: true
+        )
+        .allowsHitTesting(state != nil)
+    }
+
+    private func watchWorkoutControls(_ workout: Workout, state: WorkoutLiveState) -> some View {
+        VStack(spacing: 10) {
+            if let error = connectivityManager?.lastControlError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(STColors.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let status = connectivityManager?.lastControlStatus {
+                Label(status, systemImage: connectivityManager?.isReachable == true ? "checkmark.circle.fill" : "arrow.trianglehead.2.clockwise.rotate.90")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(STColors.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if state.phase == .review {
+                    HStack(spacing: 12) {
+                        Stepper("Reps: \(watchReviewReps)", value: $watchReviewReps, in: 0...100)
+                        Stepper(
+                            "\(String(format: "%.1f", watchReviewWeightLb)) lb",
+                            value: $watchReviewWeightLb, in: 0...1000, step: 2.5
+                        )
+                    }
+                    Button("Save Set") {
+                        sendWatchControl(
+                            state: state, action: .saveReviewedSet,
+                            reviewedReps: watchReviewReps,
+                            reviewedWeightKg: WeightUnit.lbs.toKg(watchReviewWeightLb)
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+            } else {
+                    HStack(spacing: 8) {
+                        watchControlButton(
+                            "Previous",
+                            isDisabled: state.phase == .lifting || state.currentExerciseIndex == 0
+                        ) {
+                            sendWatchControl(state: state, action: .previousExercise)
+                        }
+
+                        watchControlButton(
+                            state.phase == .lifting ? "End Set" : "Start Set",
+                            isPrimary: true
+                        ) {
+                            sendWatchControl(
+                                state: state,
+                                action: state.phase == .lifting ? .endSet : .startSet
+                            )
+                        }
+
+                        watchControlButton(
+                            "Next",
+                            isDisabled: state.phase == .lifting ||
+                                state.currentExerciseIndex >= workout.exercises.count - 1
+                        ) {
+                            sendWatchControl(state: state, action: .nextExercise)
+                        }
+                    }
+
+                    if state.phase == .resting {
+                        HStack(spacing: 12) {
+                            if let end = state.restEndsAt, end > Date() {
+                                Label {
+                                    Text(timerInterval: Date()...end, countsDown: true)
+                                } icon: {
+                                    Image(systemName: "timer")
+                                }
+                                .font(.title3.bold().monospacedDigit())
+                                .foregroundStyle(.white)
+                            }
+                            Spacer()
+                            Button("End Rest") {
+                                sendWatchControl(state: state, action: .skipRest)
+                            }
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.black)
+                            .frame(minWidth: 112, minHeight: 44)
+                            .background(
+                                Color(red: 0.949, green: 0.800, blue: 0.051),
+                                in: RoundedRectangle(cornerRadius: 14)
+                            )
+                            .buttonStyle(.plain)
+                        }
+                        .padding(12)
+                        .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 16))
+                    }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(watchMirrorRaisedSurface)
+        .overlay(alignment: .top) { Divider().overlay(Color.white.opacity(0.08)) }
+    }
+
+    private func watchControlButton(
+        _ title: String,
+        isPrimary: Bool = false,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .foregroundStyle(isPrimary ? Color.white : Color.white.opacity(0.9))
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(
+                    isPrimary ? STColors.primary : Color.white.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 14)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(isPrimary ? Color.clear : Color.white.opacity(0.1), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.35 : 1)
+    }
+
+    private func watchPhaseLabel(_ state: WorkoutLiveState) -> String {
+        switch state.phase {
+        case .ready: return "Ready for set"
+        case .lifting: return "Set in progress"
+        case .review: return "Review set on either device"
+        case .resting: return "Resting"
+        case .ended: return "Workout ended"
+        }
+    }
+
+    private func sendWatchControl(
+        state: WorkoutLiveState?,
+        action: WorkoutLiveAction,
+        reviewedReps: Int? = nil,
+        reviewedWeightKg: Double? = nil,
+        exerciseID: UUID? = nil,
+        setID: UUID? = nil,
+        setType: SetType? = nil
+    ) {
+        guard let state, let connectivityManager else { return }
+        connectivityManager.sendWorkoutControl(
+            state: state, action: action,
+            reviewedReps: reviewedReps, reviewedWeightKg: reviewedWeightKg,
+            exerciseID: exerciseID, setID: setID, setType: setType
+        )
     }
 
     // MARK: - Start View
