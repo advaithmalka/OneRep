@@ -192,6 +192,12 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
 
 schemes:
+  OneRepWatch:
+    build:
+      targets:
+        StrengthTrackerWatch: all
+    run:
+      config: Debug
   StrengthTracker:
     build:
       targets:
