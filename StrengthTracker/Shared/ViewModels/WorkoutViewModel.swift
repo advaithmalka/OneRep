@@ -193,7 +193,7 @@ public final class WorkoutViewModel {
         try? await workoutRepository.deleteAllIncomplete()
 
         var exercises: [WorkoutExercise] = template?.resolvingBodyweight(from: bodyweightLibrary).instantiateExercises() ?? []
-        if template != nil, plannedSessionId == nil, !isDeload {
+        if template != nil, !isDeload {
             let history = (try? await workoutRepository.fetchAll()) ?? []
             exercises = WorkoutDefaultsService.applyingLatestPerformance(
                 to: exercises, history: history
@@ -237,6 +237,7 @@ public final class WorkoutViewModel {
         Task {
             await save.value
             await loadPreviousDataForExercise(workoutExercise.id)
+            await seedNewExerciseFromHistory(workoutExercise.id)
         }
     }
 
@@ -254,7 +255,22 @@ public final class WorkoutViewModel {
         ) else { return nil }
         await persist(workout)
         await loadPreviousDataForExercise(workoutExercise.id)
+        await seedNewExerciseFromHistory(workoutExercise.id)
         return currentWorkout?.exercises.first { $0.id == workoutExercise.id }
+    }
+
+    private func seedNewExerciseFromHistory(_ exerciseID: UUID) async {
+        let history = (try? await workoutRepository.fetchAll()) ?? previousHistory ?? []
+        guard var workout = currentWorkout,
+              let index = workout.exercises.firstIndex(where: { $0.id == exerciseID }),
+              workout.exercises[index].sets.isEmpty else { return }
+        let prefilled = WorkoutDefaultsService.applyingLatestPerformance(
+            to: [workout.exercises[index]], history: history,
+            before: workout.startedAt
+        )
+        guard let sets = prefilled.first?.sets, !sets.isEmpty else { return }
+        workout.exercises[index].sets = sets
+        await persist(workout)
     }
 
     private func appendExerciseOptimistically(

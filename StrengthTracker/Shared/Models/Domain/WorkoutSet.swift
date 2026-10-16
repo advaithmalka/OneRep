@@ -390,20 +390,18 @@ public struct WorkoutExercise: Identifiable, Hashable, Sendable, Codable {
     }
 
     /// Updates one plain set and carries its load into later incomplete sets of the
-    /// same warm-up/working class. Completed work and side/drop-set structures keep
-    /// their recorded values.
+    /// same exercise. Completed work and side/drop-set structures keep their
+    /// recorded values.
     @discardableResult
     public mutating func setWeightAndCarryForward(_ weight: Double?, from setID: UUID) -> Bool {
         guard let sourceIndex = sets.firstIndex(where: { $0.id == setID }),
               sets[sourceIndex].sideSets == nil,
               sets[sourceIndex].dropSets.isEmpty else { return false }
-        let isWarmup = sets[sourceIndex].setType == .warmup
         sets[sourceIndex].weight = weight
         for index in sets.indices where index > sourceIndex &&
             !sets[index].isFullyCompleted &&
             sets[index].sideSets == nil &&
-            sets[index].dropSets.isEmpty &&
-            (sets[index].setType == .warmup) == isWarmup {
+            sets[index].dropSets.isEmpty {
             sets[index].weight = weight
         }
         return true

@@ -249,6 +249,9 @@ struct ContentViewWrapper: View {
                 Task { @MainActor in await syncWatchCatalog(container) }
             }
         }
+        .onChange(of: container.dataRevision.value) { _, _ in
+            Task { @MainActor in await syncWatchPerformance(container) }
+        }
     }
 
     private func handleDeepLink(_ url: URL) {
@@ -301,6 +304,7 @@ private func syncWatchCatalog(_ container: AppContainer) async {
         )
         container.connectivityManager.syncExercises(exercises)
         await container.syncActivePlanToWatch()
+        await syncWatchPerformance(container)
     } catch {
         print("[iOS Sync] Failed to sync Watch catalog: \(error)")
     }
@@ -314,5 +318,15 @@ private func syncWatchCatalog(_ container: AppContainer) async {
         "bodyWeightKg": prefs.bodyWeightKg ?? 0,
         "debugMotionRecordingEnabled": prefs.debugMotionRecordingEnabled
     ])
+}
+
+@MainActor
+private func syncWatchPerformance(_ container: AppContainer) async {
+    do {
+        let workouts = try await container.workoutRepository.fetchAll()
+        container.connectivityManager.syncWorkoutHistory(workouts)
+    } catch {
+        print("[iOS Sync] Failed to sync workout history: \(error)")
+    }
 }
 #endif

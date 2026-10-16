@@ -21,92 +21,106 @@ struct RestTimerView: View {
                     dismiss()
                 }
 
-            VStack(spacing: 32) {
-                // Circular progress with countdown
-                ZStack {
-                    // Background circle
-                    Circle()
-                        .stroke(Color.gray.opacity(0.3), lineWidth: 12)
-                        .frame(width: 240, height: 240)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 32) {
+                        // Circular progress with countdown
+                        ZStack {
+                            // Background circle
+                            Circle()
+                                .stroke(Color.gray.opacity(0.3), lineWidth: 12)
+                                .frame(width: 240, height: 240)
 
-                    // Progress circle
-                    Circle()
-                        .trim(from: 0, to: service.progress)
-                        .stroke(
-                            service.isCompleted ? Color.green : Color.blue,
-                            style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                        )
-                        .frame(width: 240, height: 240)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.linear(duration: 0.5), value: service.progress)
+                            // Progress circle
+                            Circle()
+                                .trim(from: 0, to: service.progress)
+                                .stroke(
+                                    service.isCompleted ? Color.green : Color.blue,
+                                    style: StrokeStyle(lineWidth: 12, lineCap: .round)
+                                )
+                                .frame(width: 240, height: 240)
+                                .rotationEffect(.degrees(-90))
+                                .animation(.linear(duration: 0.5), value: service.progress)
 
-                    // Countdown text
-                    VStack(spacing: 8) {
-                        Text(service.formattedTime)
-                            .font(.system(size: 56, weight: .bold, design: .rounded))
-                            .foregroundColor(.primary)
+                            // Countdown text
+                            VStack(spacing: 8) {
+                                Text(service.formattedTime)
+                                    .font(.system(size: 56, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
 
-                        if service.isCompleted {
-                            Text("Rest Complete!")
-                                .font(.subheadline)
-                                .foregroundColor(.green)
-                        } else if service.isRunning {
-                            Text("Resting...")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Paused")
-                                .font(.subheadline)
-                                .foregroundColor(.orange)
+                                if service.isCompleted {
+                                    Text("Rest Complete!")
+                                        .font(.subheadline)
+                                        .foregroundColor(.green)
+                                } else if service.isRunning {
+                                    Text("Resting...")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("Paused")
+                                        .font(.subheadline)
+                                        .foregroundColor(.orange)
+                                }
+                            }
                         }
-                    }
-                }
-                .padding()
+                        .padding()
 
-                // Control buttons
-                HStack(spacing: 24) {
-                    if service.isRunning {
-                        Button {
-                            service.pause()
-                        } label: {
-                            Label("Pause", systemImage: "pause.fill")
-                                .frame(width: 100)
+                        // Control buttons
+                        HStack(spacing: 24) {
+                            if service.isRunning {
+                                Button {
+                                    service.pause()
+                                } label: {
+                                    Label("Pause", systemImage: "pause.fill")
+                                        .frame(width: 100)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.orange)
+                            } else {
+                                Button {
+                                    service.resume()
+                                } label: {
+                                    Label("Start", systemImage: "play.fill")
+                                        .frame(width: 100)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.blue)
+                            }
+
+                            Button {
+                                service.reset()
+                            } label: {
+                                Label("Reset", systemImage: "arrow.clockwise")
+                                    .frame(width: 100)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.gray)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                    } else {
-                        Button {
-                            service.resume()
-                        } label: {
-                            Label("Start", systemImage: "play.fill")
-                                .frame(width: 100)
+                        .padding(.horizontal)
+
+                        // Quick add time buttons
+                        if service.isRunning {
+                            HStack(spacing: 16) {
+                                QuickTimeButton(seconds: 30, service: service)
+                                QuickTimeButton(seconds: 60, service: service)
+                                QuickTimeButton(seconds: 90, service: service)
+                            }
+                            .padding(.horizontal)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.blue)
-                    }
 
-                    Button {
-                        service.reset()
-                    } label: {
-                        Label("Reset", systemImage: "arrow.clockwise")
-                            .frame(width: 100)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.gray)
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(.regularMaterial)
+                    )
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
+                    .padding(.bottom, 12)
                 }
-                .padding(.horizontal)
+                .scrollIndicators(.hidden)
 
-                // Quick add time buttons
-                if service.isRunning {
-                    HStack(spacing: 16) {
-                        QuickTimeButton(seconds: 30, service: service)
-                        QuickTimeButton(seconds: 60, service: service)
-                        QuickTimeButton(seconds: 90, service: service)
-                    }
-                    .padding(.horizontal)
-                }
-
-                // Dismiss button
+                // Keep Close reachable even when the sheet is short.
                 Button {
                     dismiss()
                 } label: {
@@ -116,13 +130,9 @@ struct RestTimerView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.blue)
                 .padding(.horizontal, 32)
+                .padding(.bottom, 24)
             }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(.regularMaterial)
-            )
-            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

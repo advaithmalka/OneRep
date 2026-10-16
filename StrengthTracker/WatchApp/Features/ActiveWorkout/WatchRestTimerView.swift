@@ -17,68 +17,76 @@ struct WatchRestTimerView: View {
     private let primaryYellow = Color(red: 0.949, green: 0.800, blue: 0.051)
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .bold))
-                        .frame(width: 28, height: 28)
-                        .background(Color.white.opacity(0.15))
-                        .clipShape(Circle())
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 8) {
+                    HStack {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .frame(width: 28, height: 28)
+                                .background(Color.white.opacity(0.15))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                        if viewModel.isPaused {
+                            Text("PAUSED")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(primaryYellow)
+                        }
+                    }
+
+                    ZStack {
+                        Circle()
+                            .stroke(Color.white.opacity(0.1), lineWidth: 6)
+                            .frame(width: 94, height: 94)
+
+                        Circle()
+                            .trim(from: 0, to: viewModel.restProgress)
+                            .stroke(
+                                primaryYellow,
+                                style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                            )
+                            .frame(width: 94, height: 94)
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 1), value: viewModel.restProgress)
+
+                        VStack(spacing: 2) {
+                            Image(systemName: "timer")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(primaryYellow)
+
+                            Text(viewModel.restTimerText)
+                                .font(.system(size: 24, weight: .bold))
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .focusable()
+                    .focused($isCrownFocused)
+                    .digitalCrownRotation(detent: $crownPosition, from: -4000, through: 4000,
+                                          by: 1, sensitivity: .low)
+                    .onChange(of: crownPosition) { previous, position in
+                        viewModel.adjustRestTimer(by: (position - previous) * 15)
+                    }
+                    .onTapGesture { isCrownFocused = true }
+                    .accessibilityLabel("Timer \(viewModel.restTimerText). Tap to adjust with the Crown")
+
+                    ProgressView(value: viewModel.restProgress)
+                        .tint(primaryYellow)
+                        .accessibilityLabel("Timer progress")
+
+                    HStack(spacing: 8) {
+                        adjustmentButton("−15", seconds: -15)
+                        adjustmentButton("+15", seconds: 15)
+                    }
                 }
-                .buttonStyle(.plain)
-                Spacer()
-                if viewModel.isPaused {
-                    Text("PAUSED")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(primaryYellow)
-                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
             }
-
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.1), lineWidth: 6)
-                    .frame(width: 94, height: 94)
-
-                Circle()
-                    .trim(from: 0, to: viewModel.restProgress)
-                    .stroke(
-                        primaryYellow,
-                        style: StrokeStyle(lineWidth: 6, lineCap: .round)
-                    )
-                    .frame(width: 94, height: 94)
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear(duration: 1), value: viewModel.restProgress)
-
-                VStack(spacing: 2) {
-                    Image(systemName: "timer")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(primaryYellow)
-
-                    Text(viewModel.restTimerText)
-                        .font(.system(size: 24, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                }
-            }
-            .focusable()
-            .focused($isCrownFocused)
-            .digitalCrownRotation(detent: $crownPosition, from: -4000, through: 4000,
-                                  by: 1, sensitivity: .low)
-            .onChange(of: crownPosition) { previous, position in
-                viewModel.adjustRestTimer(by: (position - previous) * 15)
-            }
-            .onTapGesture { isCrownFocused = true }
-            .accessibilityLabel("Timer \(viewModel.restTimerText). Turn the Crown to adjust by 15 seconds")
-
-            ProgressView(value: viewModel.restProgress)
-                .tint(primaryYellow)
-                .accessibilityLabel("Timer progress")
-
-            HStack(spacing: 8) {
-                adjustmentButton("−15", seconds: -15)
-                adjustmentButton("+15", seconds: 15)
-            }
+            .scrollIndicators(.hidden)
 
             Button {
                 #if os(watchOS)
@@ -101,17 +109,15 @@ struct WatchRestTimerView: View {
             }
             .buttonStyle(.plain)
             .disabled(viewModel.isPaused)
+            .padding(.horizontal)
+            .padding(.bottom, 6)
         }
-        .padding()
-        .defaultFocus($isCrownFocused, true)
-        .onAppear { isCrownFocused = true }
         // Haptic feedback on timer completion is handled by WatchWorkoutViewModel.restTimerCompleted()
     }
 
     private func adjustmentButton(_ title: String, seconds: Int) -> some View {
         Button {
             viewModel.adjustRestTimer(by: seconds)
-            isCrownFocused = true
         } label: {
             Text(title)
                 .font(.system(size: 14, weight: .bold))

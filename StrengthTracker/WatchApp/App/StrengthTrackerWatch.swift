@@ -96,6 +96,11 @@ struct StrengthTrackerWatchApp: App {
                 }
             }
 
+            let workoutVMForHistory = container.watchWorkoutViewModel
+            container.connectivityManager.onWorkoutHistoryReceived = { workouts in
+                workoutVMForHistory.phonePerformanceHistory = workouts
+            }
+
             // Wire exercise sync: when exercises arrive from iPhone, upsert local data
             let exerciseRepo = container.exerciseRepository
             container.connectivityManager.onExercisesReceived = { receivedExercises in

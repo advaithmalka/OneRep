@@ -20,6 +20,7 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
     public var onTemplatesReceived: (([WorkoutTemplate]) -> Void)?
     public var onSessionReady: (() -> Void)?
     public var onPlannedSessionsReceived: (([PlannedSessionSync]) -> Void)?
+    public var onWorkoutHistoryReceived: (([Workout]) -> Void)?
     public var onWatchWorkoutSnapshot: ((Workout) -> Void)?
     public var onWatchWorkoutStarted: ((Workout) -> Void)?
     public var onWatchWorkoutEnded: (() -> Void)?
@@ -103,6 +104,21 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
             try WCSession.default.updateApplicationContext(context)
         } catch {
             print("ConnectivityManager: Failed to sync planned sessions - \(error)")
+        }
+        #endif
+    }
+
+    /// Keep the Watch's exercise defaults current even for workouts logged on iPhone.
+    public func syncWorkoutHistory(_ workouts: [Workout]) {
+        #if canImport(WatchConnectivity)
+        guard WCSession.default.activationState == .activated else { return }
+        do {
+            let data = try encoder.encode(WorkoutDefaultsService.historyForWatch(workouts))
+            var context = WCSession.default.applicationContext
+            context["workoutHistorySync"] = data.base64EncodedString()
+            try WCSession.default.updateApplicationContext(context)
+        } catch {
+            print("ConnectivityManager: Failed to sync workout history - \(error)")
         }
         #endif
     }
@@ -384,6 +400,9 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
             plannedSessionData = Data(base64Encoded: payloadStr)
         }
 
+        let workoutHistoryData = (applicationContext["workoutHistorySync"] as? String)
+            .flatMap { Data(base64Encoded: $0) }
+
         let liveData = (applicationContext["workoutLive"] as? String).flatMap { Data(base64Encoded: $0) }
 
         Task { @MainActor in
@@ -407,6 +426,11 @@ public final class ConnectivityManager: NSObject, @unchecked Sendable {
             if let data = plannedSessionData,
                let sessions = try? decoder.decode([PlannedSessionSync].self, from: data) {
                 self.onPlannedSessionsReceived?(sessions)
+            }
+
+            if let data = workoutHistoryData,
+               let workouts = try? decoder.decode([Workout].self, from: data) {
+                self.onWorkoutHistoryReceived?(workouts)
             }
 
             if let data = liveData,
@@ -505,6 +529,9 @@ extension ConnectivityManager: WCSessionDelegate {
             plannedSessionData = Data(base64Encoded: payloadStr)
         }
 
+        let workoutHistoryData = (applicationContext["workoutHistorySync"] as? String)
+            .flatMap { Data(base64Encoded: $0) }
+
         let liveData = (applicationContext["workoutLive"] as? String).flatMap { Data(base64Encoded: $0) }
 
         Task { @MainActor in
@@ -528,6 +555,11 @@ extension ConnectivityManager: WCSessionDelegate {
             if let data = plannedSessionData,
                let sessions = try? decoder.decode([PlannedSessionSync].self, from: data) {
                 self.onPlannedSessionsReceived?(sessions)
+            }
+
+            if let data = workoutHistoryData,
+               let workouts = try? decoder.decode([Workout].self, from: data) {
+                self.onWorkoutHistoryReceived?(workouts)
             }
 
             if let data = liveData,

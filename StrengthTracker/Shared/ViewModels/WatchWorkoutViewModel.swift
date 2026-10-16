@@ -77,6 +77,8 @@ public final class WatchWorkoutViewModel {
     private var liveRevision: Int64 = 0
     private var processedControlIDs: Set<UUID> = []
     private var processedControlOrder: [UUID] = []
+    /// Completed phone workouts delivered through WatchConnectivity for defaults.
+    public var phonePerformanceHistory: [Workout] = []
     private func sessionStateKey(for workoutID: UUID) -> String {
         "oneRep.watch.sessionState.\(workoutID.uuidString)"
     }
@@ -650,13 +652,19 @@ public final class WatchWorkoutViewModel {
     }
 
     public func addExercises(_ exercises: [Exercise]) async throws {
+        let history = await historyForDefaults()
         guard var workout = activeWorkout, isActive else { return }
         let existing = Set(workout.exercises.map { $0.exercise.id })
         for exercise in exercises where !existing.contains(exercise.id) {
-            workout.exercises.append(WorkoutExercise(
+            let entry = WorkoutExercise(
                 id: UUID(), exercise: exercise, order: workout.exercises.count + 1,
                 supersetGroup: nil, notes: nil, restTimerSeconds: nil, sets: []
-            ))
+            )
+            workout.exercises.append(
+                WorkoutDefaultsService.applyingLatestPerformance(
+                    to: [entry], history: history, before: workout.startedAt
+                )[0]
+            )
         }
         try await persistNow(workout)
         activeWorkout = workout
@@ -766,6 +774,9 @@ public final class WatchWorkoutViewModel {
                 sets: []
             )
         }
+        let prefilledExercises = WorkoutDefaultsService.applyingLatestPerformance(
+            to: workoutExercises, history: phonePerformanceHistory
+        )
 
         let workout = Workout(
             id: UUID(),
@@ -775,7 +786,7 @@ public final class WatchWorkoutViewModel {
             notes: nil,
             templateId: nil,
             healthKitWorkoutId: nil,
-            exercises: workoutExercises
+            exercises: prefilledExercises
         )
 
         activeWorkout = workout
@@ -789,7 +800,18 @@ public final class WatchWorkoutViewModel {
     /// Async: persists the current workout and starts HealthKit session.
     /// Call in a background Task after prepareQuickStart.
     public func persistAndStartSession() async {
-        guard let workout = activeWorkout else { return }
+        guard let initialWorkout = activeWorkout else { return }
+        var workout = initialWorkout
+        let history = await historyForDefaults()
+        let prefilled = WorkoutDefaultsService.applyingLatestPerformance(
+            to: workout.exercises, history: history, before: workout.startedAt
+        )
+        if activeWorkout == initialWorkout {
+            workout.exercises = prefilled
+            activeWorkout = workout
+        } else {
+            workout = activeWorkout ?? initialWorkout
+        }
 
         do {
             let saved = try await workoutRepository.save(workout)
@@ -809,6 +831,14 @@ public final class WatchWorkoutViewModel {
         publishLiveState()
     }
 
+    private func historyForDefaults() async -> [Workout] {
+        let localHistory = (try? await workoutRepository.fetchAll()) ?? []
+        return Array(Dictionary(
+            (localHistory + phonePerformanceHistory).map { ($0.id, $0) },
+            uniquingKeysWith: { local, _ in local }
+        ).values)
+    }
+
     public func startWorkout(name: String, from template: WorkoutTemplate, isDeload: Bool = false) async {
         isPaused = false
         pausedAt = nil
@@ -823,8 +853,8 @@ public final class WatchWorkoutViewModel {
         targetRepsPerExercise = [:]
 
         var workoutExercises = template.instantiateExercises()
-        if plannedSessionId == nil, !isDeload {
-            let history = (try? await workoutRepository.fetchAll()) ?? []
+        if !isDeload {
+            let history = await historyForDefaults()
             workoutExercises = WorkoutDefaultsService.applyingLatestPerformance(
                 to: workoutExercises, history: history
             )

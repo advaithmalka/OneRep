@@ -32,10 +32,45 @@ public enum WorkoutDefaultsService {
                 .first else { return exercise }
 
             var resolved = exercise
+            if resolved.sets.isEmpty {
+                resolved.sets = previous.sets.filter {
+                    $0.isFullyCompleted && $0.sideSets == nil && $0.dropSets.isEmpty
+                }.enumerated().map { index, prior in
+                    ExerciseSet(
+                        id: UUID(), order: index + 1, setType: prior.setType,
+                        weight: prior.weight, reps: prior.reps,
+                        durationSeconds: prior.durationSeconds,
+                        distanceMeters: prior.distanceMeters,
+                        rpe: nil, isCompleted: false,
+                        isPersonalRecord: false, completedAt: nil
+                    )
+                }
+            }
             apply(previous: previous, to: &resolved, warmup: true)
             apply(previous: previous, to: &resolved, warmup: false)
             return resolved
         }
+    }
+
+    /// Keep the newest two completed observations per exercise for Watch defaults.
+    /// Strip unrelated workout details so application context stays small.
+    public static func historyForWatch(_ history: [Workout]) -> [Workout] {
+        var counts: [UUID: Int] = [:]
+        return history
+            .filter { $0.completedAt != nil && !$0.isDeload }
+            .sorted { $0.trainingDate > $1.trainingDate }
+            .compactMap { workout in
+                var copy = workout
+                copy.exercises = workout.exercises.filter { exercise in
+                    guard exercise.sets.contains(where: \.isFullyCompleted),
+                          counts[exercise.exercise.id, default: 0] < 2 else { return false }
+                    counts[exercise.exercise.id, default: 0] += 1
+                    return true
+                }
+                guard !copy.exercises.isEmpty else { return nil }
+                copy.notes = nil
+                return copy
+            }
     }
 
     private static func apply(
